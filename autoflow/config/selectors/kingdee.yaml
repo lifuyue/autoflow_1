@@ -1,0 +1,5 @@
+# 选择器占位：请根据实际页面更新
+upload_input_selector: "input[type='file']"
+submit_selector: "button[type='submit']"
+post_submit_wait: 1
+

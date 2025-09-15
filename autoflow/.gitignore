@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.*
+
+# Build / dist
+build/
+dist/
+*.spec
+
+# Logs and temp
+*.log
+autoflow/work/logs/
+autoflow/work/tmp/
+autoflow/work/inbox/*
+autoflow/work/out/*
+!autoflow/work/**/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Playwright artifacts
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+Thumbs.db

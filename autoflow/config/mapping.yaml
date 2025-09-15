@@ -1,0 +1,10 @@
+# 映射示例：将源数据汇总写入模板固定单元格
+clean:
+  # dropna_columns: ["Amount"]
+  # fillna: {"Amount": 0}
+
+cells:
+  B2: "$profile.company_name"  # 公司名称
+  B3: "today"                  # 日期
+  B4: "sum:Amount"            # 总金额（汇总源表 Amount 列）
+

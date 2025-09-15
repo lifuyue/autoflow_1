@@ -1,0 +1,45 @@
+profiles:
+  demo_kingdee:
+    display_name: 演示-金蝶
+    company_name: 演示公司（Kingdee）
+    download:
+      type: kdocs
+      # 生产环境优先 direct_url; 若需登录可配置 link_url + login 选择器
+      # direct_url: "https://example.com/path/to/file.xlsx"  # TODO: 替换为真实直链
+      filename: demo_input.xlsx
+    transform:
+      mapping_file: autoflow/config/mapping.yaml
+      template_path: autoflow/templates/sample_template.xlsx
+    upload:
+      type: kingdee
+      # API 优先（若有）：
+      # api:
+      #   url: "https://kingdee.example.com/api/upload"
+      #   headers: { Authorization: "Bearer <token>" }
+      # 浏览器回退：
+      upload_url: "https://kingdee.example.com/upload"  # TODO: 替换为真实地址
+      selectors_file: autoflow/config/selectors/kingdee.yaml
+      login:
+        username_selector: "#username"
+        password_selector: "#password"
+        submit_selector: "#login-btn"
+
+  demo_tax:
+    display_name: 演示-电子税务
+    company_name: 演示公司（税务）
+    download:
+      type: dingpan
+      # direct_url: "https://example.com/tax_source.xlsx"  # TODO: 替换为真实直链
+      filename: demo_tax_input.xlsx
+    transform:
+      mapping_file: autoflow/config/mapping.yaml
+      template_path: autoflow/templates/sample_template.xlsx
+    upload:
+      type: tax_ehall
+      upload_url: "https://etax.example.com/upload"  # TODO: 替换为真实地址
+      selectors_file: autoflow/config/selectors/tax_ehall.yaml
+      login:
+        username_selector: "input[name='username']"
+        password_selector: "input[name='password']"
+        submit_selector: "button[type='submit']"
+
