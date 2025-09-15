@@ -45,6 +45,17 @@ pip install -r autoflow/requirements.txt
 python -m playwright install chromium
 ```
 
+### 安装排错（Windows）
+- 检查 Python/pip 指向一致：
+  - `python --version`、`where python`
+  - `pip --version`、`where pip`
+- 先升级安装工具：`python -m pip install -U pip setuptools wheel`
+- 重试安装并收集详细日志：
+  - `pip -vvv install -r autoflow/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn`
+- 编译相关报错（如 lxml/cryptography）：需要安装 Visual Studio Build Tools 与 Windows SDK。
+- Playwright 报错：确认已执行 `python -m playwright install chromium`（或安装 Edge/Chrome）。
+- 公司代理/证书：配置 `HTTP_PROXY/HTTPS_PROXY` 环境变量或在 `%APPDATA%\pip\pip.ini` 设置镜像与证书。
+
 ## 配置
 - profiles：`autoflow/config/profiles.yaml`
   - 每个 profile 样例（见文件内注释）：
