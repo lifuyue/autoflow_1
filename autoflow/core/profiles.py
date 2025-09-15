@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 import yaml
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # noqa: BLE001
+    def load_dotenv(*args, **kwargs):  # type: ignore
+        return False
+import sys
 
 from .errors import ConfigError
 
@@ -48,11 +53,32 @@ class Profile:
         return target
 
 
+def _is_frozen() -> bool:
+    return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
 def _project_root() -> Path:
     env = os.getenv("AUTOFLOW_ROOT")
     if env:
         return Path(env)
-    # Assume this file is under <root>/autoflow/core
+    # When frozen (PyInstaller onefile), resources are under sys._MEIPASS
+    if _is_frozen():
+        return Path(getattr(sys, "_MEIPASS"))  # type: ignore[arg-type]
+    # In source layout, this file is under <root>/autoflow/core
+    return Path(__file__).resolve().parents[2]
+
+
+def _app_dir_writable_base() -> Path:
+    """Writable base for runtime files (work/logs/out).
+
+    - Frozen: alongside the executable
+    - Source: repository root
+    """
+    if _is_frozen():
+        try:
+            return Path(sys.executable).resolve().parent
+        except Exception:  # noqa: BLE001
+            return Path.cwd()
     return Path(__file__).resolve().parents[2]
 
 
@@ -61,7 +87,8 @@ def _config_dir() -> Path:
 
 
 def _work_dir() -> Path:
-    return _project_root() / "autoflow" / "work"
+    # Always use a writable location outside of bundled resources
+    return _app_dir_writable_base() / "autoflow" / "work"
 
 
 def ensure_work_dirs() -> dict[str, Path]:
@@ -111,6 +138,10 @@ def resolve_config_path(path: str | Path) -> Path:
     p = Path(path)
     if p.is_absolute():
         return p
+    # Support paths with or without leading 'autoflow/'
+    parts = p.parts
+    if parts and parts[0] == "autoflow":
+        return _project_root() / p
     return _project_root() / "autoflow" / p
 
 

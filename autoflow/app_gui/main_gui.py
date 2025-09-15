@@ -39,7 +39,11 @@ class App(tk.Tk):
         self.logger = get_logger()
         self.profiles = load_profiles()
         self.selected_profile_name = tk.StringVar()
-        self.output_dir = tk.StringVar(value=str(Path("autoflow/work/out").resolve()))
+        try:
+            from autoflow.core.profiles import _work_dir
+            self.output_dir = tk.StringVar(value=str((_work_dir() / "out").resolve()))
+        except Exception:
+            self.output_dir = tk.StringVar(value=str(Path("autoflow/work/out").resolve()))
 
         self._build_ui()
         self.progress_queue: queue.Queue = queue.Queue()

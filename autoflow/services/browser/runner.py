@@ -6,6 +6,7 @@ import time
 import yaml
 
 from autoflow.core.logger import get_logger
+from autoflow.core.profiles import resolve_config_path
 from autoflow.core.errors import BrowserError
 
 
@@ -17,7 +18,14 @@ class BrowserRunner:
 
     def __init__(self, headless: bool = False, shots_dir: Path | None = None):
         self.headless = headless
-        self.shots_dir = shots_dir or Path("autoflow/work/logs/shot")
+        try:
+            from autoflow.core.profiles import ensure_work_dirs
+            if shots_dir is None:
+                self.shots_dir = ensure_work_dirs()["shot"]
+            else:
+                self.shots_dir = shots_dir
+        except Exception:
+            self.shots_dir = shots_dir or Path("autoflow/work/logs/shot")
         self.shots_dir.mkdir(parents=True, exist_ok=True)
         self.logger = get_logger()
         self._browser = None
@@ -33,7 +41,20 @@ class BrowserRunner:
                 "未安装 Playwright。请执行: pip install playwright && python -m playwright install chromium"
             ) from e
         pw = sync_playwright().start()
-        browser = pw.chromium.launch(headless=self.headless)
+        # Prefer bundled Chromium; fallback to system Edge/Chrome if not installed
+        try:
+            browser = pw.chromium.launch(headless=self.headless)
+        except Exception:
+            try:
+                browser = pw.chromium.launch(headless=self.headless, channel="msedge")
+            except Exception:
+                try:
+                    browser = pw.chromium.launch(headless=self.headless, channel="chrome")
+                except Exception as e:  # noqa: BLE001
+                    pw.stop()
+                    raise BrowserError(
+                        "无法启动浏览器。请安装 Chromium: python -m playwright install chromium，或安装系统 Edge/Chrome。"
+                    ) from e
         context = browser.new_context()
         page = context.new_page()
         self._playwright = pw
@@ -121,12 +142,7 @@ class BrowserRunner:
 
     @staticmethod
     def _load_selectors(path: str | Path) -> dict[str, Any]:
-        p = Path(path)
-        if not p.is_absolute():
-            # Allow relative to project
-            base = Path(__file__).resolve().parents[3] / p
-            if base.exists():
-                p = base
+        p = resolve_config_path(path)
         if not p.exists():
             raise BrowserError(f"未找到选择器文件: {p}")
         with p.open("r", encoding="utf-8") as f:

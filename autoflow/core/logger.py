@@ -4,6 +4,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
+from .profiles import _work_dir
 
 
 _LOGGER: logging.Logger | None = None
@@ -18,7 +19,10 @@ def get_logger(log_dir: Path | None = None) -> logging.Logger:
     if _LOGGER is not None:
         return _LOGGER
 
-    base = Path("autoflow/work/logs") if log_dir is None else Path(log_dir)
+    if log_dir is None:
+        base = _work_dir() / "logs"
+    else:
+        base = Path(log_dir)
     base.mkdir(parents=True, exist_ok=True)
     log_path = base / "app.log"
 

@@ -17,9 +17,10 @@ echo [3/3] Building executable...
 py -m PyInstaller ^
   --noconfirm --clean --onefile --noconsole ^
   --name AutoFlow ^
-  --add-data "autoflow\config;autoflow\config" ^
-  --add-data "autoflow\templates;autoflow\templates" ^
-  autoflow\main.py
+  --collect-all playwright ^
+  --add-data "config;autoflow\config" ^
+  --add-data "templates;autoflow\templates" ^
+  main.py
 
 echo Done. Check dist\AutoFlow.exe
 endlocal
