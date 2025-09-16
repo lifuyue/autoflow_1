@@ -152,7 +152,12 @@ class App(tk.Tk):
                     credentials_provider=ask_credentials,
                     ui_log_writer=self.text_handler,
                 )
-                self.progress_queue.put(("完成", f"输出：{res.get('output_path','')}"))
+                self.progress_queue.put(
+                    (
+                        "完成",
+                        f"输出：{res.get('output_path','')} 报告：{res.get('report_path','')}",
+                    )
+                )
             except AutoFlowError as e:
                 self.progress_queue.put(("错误", str(e)))
             except Exception as e:  # noqa: BLE001
@@ -178,4 +183,3 @@ class App(tk.Tk):
 def main():
     app = App()
     app.mainloop()
-

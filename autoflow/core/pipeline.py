@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Any
+from decimal import Decimal
 import shutil
 
 from .logger import get_logger
@@ -10,7 +11,8 @@ from .profiles import ensure_work_dirs, resolve_config_path, Profile
 from .errors import DownloadError, TransformError, UploadError
 from autoflow.services.download.base import provider_from_config, ICloudProvider
 from autoflow.services.upload.base import uploader_from_config, IUploader
-from autoflow.services.transform.transformer import transform
+from autoflow.services.form_processor import FormProcessConfig, process_forms
+from autoflow.services.form_processor.providers import StaticRateProvider
 
 
 ProgressCB = Callable[[str, str], None]
@@ -32,10 +34,12 @@ class Pipeline:
         logger=None,
         download_provider: ICloudProvider | None = None,
         uploader: IUploader | None = None,
+        rate_provider=None,
     ) -> None:
         self.logger = logger or get_logger()
         self.download_provider = download_provider
         self.uploader = uploader
+        self.rate_provider = rate_provider or StaticRateProvider()
         self.work_dirs = ensure_work_dirs()
 
     def run(
@@ -71,19 +75,29 @@ class Pipeline:
         # 2. Transform & Template
         progress("2/4 处理", "读取并清洗…")
         mapping_path = resolve_config_path(profile.transform.get("mapping_file", "autoflow/config/mapping.yaml"))
-        template_path = resolve_config_path(profile.transform.get("template_path", "autoflow/templates/sample_template.xlsx"))
+        round_digits = int(profile.transform.get("round_digits", 2))
+        confirm_amount = Decimal(str(profile.transform.get("confirm_over_amount_cny", "20000")))
+        base_currency = profile.transform.get("base_currency", "CNY")
+
+        form_config = FormProcessConfig(
+            mapping_path=str(mapping_path),
+            base_currency=base_currency,
+            round_digits=round_digits,
+            confirm_over_amount_cny=confirm_amount,
+        )
+
         try:
-            output_path = transform(
-                input_path=input_path,
-                mapping_path=mapping_path,
-                template_path=template_path,
-                out_dir=out_dir,
-                tmp_dir=self.work_dirs["tmp"],
-                profile=profile,
+            form_result = process_forms(
+                input_paths=[str(input_path)],
+                output_dir=str(out_dir),
+                config=form_config,
+                rate_provider=self.rate_provider,
+                non_interactive=True,
             )
         except Exception as e:  # noqa: BLE001
             raise TransformError(str(e)) from e
-        progress("3/4 套模板", f"生成：{Path(output_path).name}")
+        output_path = Path(form_result.output_template_path)
+        progress("3/4 套模板", f"生成：{output_path.name}")
 
         # 3. Upload
         progress("4/4 上传", "上传到目标系统…")
@@ -103,6 +117,6 @@ class Pipeline:
             "profile": profile.name,
             "input_path": str(input_path),
             "output_path": str(output_path),
+            "report_path": form_result.report_path,
             "upload": result,
         }
-

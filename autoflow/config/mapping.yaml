@@ -1,10 +1,25 @@
-# 映射示例：将源数据汇总写入模板固定单元格
-clean:
-  # dropna_columns: ["Amount"]
-  # fillna: {"Amount": 0}
+# Form processor mapping configuration sample
+# input_columns: canonical column -> possible source headers (Chinese/English)
+input_columns:
+  amount: ["金额", "应收金额", "Amount"]
+  currency: ["币种", "Currency"]
+  date: ["日期", "Date"]
+  project: ["项目名称", "Project", "Description"]
+  description: ["备注", "Remark"]
 
-cells:
-  B2: "$profile.company_name"  # 公司名称
-  B3: "today"                  # 日期
-  B4: "sum:Amount"            # 总金额（汇总源表 Amount 列）
+# computed: additional constant fields injected after mapping
+computed:
+  base_currency: "CNY"
+  exchange_rate_source: "MockProvider"  # TODO: replace when integrating real fees_fetcher
 
+# validations: required columns and numeric rules
+validations:
+  required: ["amount", "currency", "date", "project"]
+  non_negative: ["amount"]
+  round:
+    amount: 2
+    base_amount: 2
+
+# thresholds: behaviour that may require human confirmation
+thresholds:
+  confirm_over_amount_cny: 20000

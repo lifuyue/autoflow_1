@@ -1,0 +1,6 @@
+Amount,Currency,Date,Project,Remark
+3000,EUR,2024-05-11,Project D,欧元回填
+40000,USD,2024-05-11,Project E,高金额需确认
+100,HKD,2024-05-11,,缺项目名
+600,XYZ,2024-05-12,Project F,未知币种
+50,CNY,,Project G,缺日期

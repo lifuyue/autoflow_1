@@ -18,7 +18,7 @@
 autoflow/
   app_gui/            # Tk/Tkinter GUI
   core/               # Orchestrator/Profiles/Logger/Errors
-  services/           # Download/Transform/Upload/Browser 封装
+  services/           # Download/Form processor/Upload/后续模块
   config/             # 多抬头配置、映射、选择器
   templates/          # Excel 模板（如无则运行时自动生成一个示例）
   work/               # 运行时文件（inbox/out/tmp/logs/shot）
@@ -65,11 +65,10 @@ python -m playwright install chromium
   - 新增“抬头”：复制一个 profile 段落，改 `display_name`、`company_name`、下载与上传配置即可。
 
 - 映射：`autoflow/config/mapping.yaml`
-  - `cells`：将表达式写入模板固定单元格。例如：
-    - `$profile.company_name` → 使用 profile 中的公司名
-    - `today` → 当天日期（YYYY-MM-DD）
-    - `sum:Amount` → 汇总源表 `Amount` 列之和
-  - 可加清洗步骤：`clean.dropna_columns`、`clean.fillna`
+  - `input_columns`：标准字段 → 多语言/多格式的源表列名列表
+  - `computed`：写入到标准化数据框的常量列（如 `base_currency`）
+  - `validations`：必填、非负、四舍五入位数等规则
+  - `thresholds.confirm_over_amount_cny`：超额提示阈值（CLI 非交互模式下自动标记 `need_confirm=true`）
 
 - 选择器：`autoflow/config/selectors/*.yaml`
   - `upload_input_selector`：文件选择 input
@@ -87,6 +86,20 @@ GUI 说明：
 - 下拉选择“抬头/账号”；点“开始”即按 4 步执行（下载/处理/套模板/上传）
 - 日志实时输出；遇到验证码或需人工操作，按弹出的浏览器提示完成即可
 - 结束后显示输出路径，截图在 `work/logs/shot/`
+
+## CLI
+```
+python -m autoflow.cli process-forms \
+  --input ./work/inbox/*.xlsx \
+  --output ./work/out \
+  --mapping ./autoflow/config/mapping.yaml \
+  --non-interactive
+```
+说明：
+- `--input` 支持 CSV/Excel，可一次性传入多文件（glob 展开或重复传参）
+- `--rate USD:CNY=7.12` 可覆盖默认汇率，未填时 `StaticRateProvider` 使用 `default_rate`
+- 非交互模式会将超阈值记录写入 `processed_forms_need_confirm.csv`
+- 执行结果会输出模板文件与 Markdown 报告路径，便于后续自动化
 
 ## 打包（Windows）
 ```
@@ -118,7 +131,7 @@ pytest -q
 - 关键模块：
   - `core/pipeline.py`：总控逻辑
   - `services/download/*`：钉盘/金山云盘（直链→浏览器回退）
-  - `services/transform/transformer.py`：pandas+openpyxl 填充模板
+  - `services/form_processor/*`：映射/清洗/校验/导出与报告
   - `services/upload/*`：金蝶/电子税务（API 优先→浏览器回退）
   - `services/browser/runner.py`：Playwright 封装（open/login/upload/screenshot）
 

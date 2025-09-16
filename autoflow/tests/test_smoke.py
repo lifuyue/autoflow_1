@@ -16,7 +16,14 @@ class FakeDownloadProvider(ICloudProvider):
     def download(self, profile, dest_dir: Path, credentials_provider=None):  # type: ignore[override]
         dest_dir.mkdir(parents=True, exist_ok=True)
         p = dest_dir / "fake_input.xlsx"
-        df = pd.DataFrame({"Item": ["A", "B", "C"], "Amount": [10, 20, 30]})
+        df = pd.DataFrame(
+            {
+                "金额": [100, 200],
+                "币种": ["CNY", "CNY"],
+                "日期": ["2024-05-10", "2024-05-10"],
+                "项目名称": ["Smoke A", "Smoke B"],
+            }
+        )
         df.to_excel(p, index=False)
         self.generated = p
         return [str(p)]
@@ -38,4 +45,3 @@ def test_smoke_pipeline_tmp(tmp_path):
     res = pipeline.run(profile=profile, out_dir=tmp_path)
     out = Path(res["output_path"])
     assert out.exists()
-
