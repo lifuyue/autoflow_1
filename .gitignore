@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Tests & coverage caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+coverage.xml
+pytest.xml
+junit*.xml
+
+# Logs
+*.log
+logs/
+# App runtime logs and artifacts
+autoflow/work/logs/
+autoflow/work/logs/shot/
+autoflow/work/logs/app.log
+
+# Runtime outputs and temp (keep .gitkeep placeholders)
+autoflow/work/tmp/
+autoflow/work/inbox/*
+autoflow/work/out/*
+!autoflow/work/**/.gitkeep
+
+# Playwright artifacts
+playwright-report/
+test-results/
+ms-playwright/
+
+# Editors/IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
