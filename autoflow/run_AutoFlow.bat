@@ -27,7 +27,7 @@ if exist "%REPO_ROOT%\.venv\Scripts\activate" (
   call "%REPO_ROOT%\.venv\Scripts\activate"
 ) else (
   echo [Info] Creating venv at %REPO_ROOT%\.venv
-  py -3.11 -m venv "%REPO_ROOT%\.venv"
+  py -3.13 -m venv "%REPO_ROOT%\.venv"
   if errorlevel 1 (
     echo [Error] Failed to create virtual environment.
     exit /b 1
