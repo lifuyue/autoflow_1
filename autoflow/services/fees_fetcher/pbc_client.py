@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import Optional
+from typing import Mapping, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
@@ -204,6 +204,9 @@ def _request(
     backoff_base: float | None = None,
     jitter: float | None = None,
     total_deadline: float | None = None,
+    method: str = "GET",
+    params: Mapping[str, str] | None = None,
+    data: Mapping[str, str] | None = None,
 ) -> requests.Response:
     cfg = REQUEST_CONFIG
     connect_timeout = connect_timeout or cfg.connect_timeout
@@ -211,6 +214,7 @@ def _request(
     attempts = attempts or cfg.attempts
     backoff_base = backoff_base or cfg.backoff_base
     jitter = jitter if jitter is not None else cfg.jitter
+    method = method.upper()
 
     start_time = time.monotonic()
     deadline_end = _CURRENT_DEADLINE_END
@@ -241,18 +245,22 @@ def _request(
             attempt_start = time.monotonic()
             _METRICS.request_attempts += 1
             LOGGER.debug(
-                "Attempt %s -> %s (connect=%.2fs read=%.2fs remaining=%s)",
+                "Attempt %s -> %s %s (connect=%.2fs read=%.2fs remaining=%s)",
                 attempt,
                 url,
+                method,
                 timeout_connect,
                 timeout_read,
                 f"{remaining:.2f}" if remaining is not None else "None",
             )
             try:
-                response = _SESSION.get(
+                response = _SESSION.request(
+                    method,
                     url,
                     timeout=timeout,
                     proxies={"http": None, "https": None},
+                    params=params,
+                    data=data,
                 )
                 response.raise_for_status()
                 response.encoding = response.apparent_encoding or "utf-8"
