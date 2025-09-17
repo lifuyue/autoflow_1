@@ -81,6 +81,7 @@ _SESSION.headers.update(
         "Connection": "close",
     }
 )
+_SESSION.trust_env = False
 _ADAPTER = HTTPAdapter(max_retries=0, pool_connections=4, pool_maxsize=4)
 _SESSION.mount("http://", _ADAPTER)
 _SESSION.mount("https://", _ADAPTER)

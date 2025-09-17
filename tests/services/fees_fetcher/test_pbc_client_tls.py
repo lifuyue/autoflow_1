@@ -18,6 +18,11 @@ def reset_client_state():
     pbc_client.reset_metrics()
 
 
+def test_session_trust_env_disabled() -> None:
+    assert hasattr(pbc_client._SESSION, "trust_env")
+    assert pbc_client._SESSION.trust_env is False
+
+
 def test_request_raises_cert_hostname_mismatch(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     host = "www.pbc.gov.cn"
     url = f"https://{host}/path"

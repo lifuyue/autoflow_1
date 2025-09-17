@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -26,6 +27,14 @@ from autoflow.services.form_processor.providers import RateLookupError, StaticRa
 
 ALLOWED_IP_FAMILIES = {"auto", "4", "6"}
 PREFERRED_SOURCES = {"auto", "pbc", "cfets", "safe"}
+PROXY_ENV_VARS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 app = typer.Typer(help="Utility CLI for AutoFlow services.")
 
@@ -42,6 +51,39 @@ def _validate_prefer_source(value: str) -> str:
     if value not in PREFERRED_SOURCES:
         raise typer.BadParameter("prefer-source must be one of auto, pbc, cfets, safe")
     return value
+
+
+def _clear_proxy_env() -> list[str]:
+    cleared: list[str] = []
+    for key in PROXY_ENV_VARS:
+        if key in os.environ:
+            os.environ.pop(key, None)
+            cleared.append(key)
+    return cleared
+
+
+@app.callback()
+def main_callback(
+    log_level: str = typer.Option(
+        "INFO",
+        "--log-level",
+        help="Set global logging level (e.g. DEBUG/INFO/WARNING).",
+    ),
+) -> None:
+    """Configure global CLI behaviour before executing commands."""
+
+    cleared = _clear_proxy_env()
+    logger = get_logger()
+
+    level_value = getattr(logging, log_level.upper(), None)
+    if not isinstance(level_value, int):
+        raise typer.BadParameter(f"Unknown log level: {log_level}")
+
+    logging.getLogger().setLevel(level_value)
+    logger.setLevel(level_value)
+
+    if cleared:
+        logger.debug("Cleared proxy environment variables: %s", ",".join(sorted(cleared)))
 
 
 @app.command("get-rate")
@@ -148,6 +190,7 @@ def _print_tls_guidance(diag: dict[str, object]) -> None:
 @app.command("build-monthly-rates")
 def cli_build_monthly_rates(
     start: str = typer.Option(..., help="起始月份 YYYY-MM，如 2023-01"),
+    end: str | None = typer.Option(None, help="结束月份 YYYY-MM，默认为当前月"),
     output: Path | None = typer.Option(
         None,
         help="输出 CSV，默认 data/rates/monthly_usd_cny.csv",
@@ -159,7 +202,6 @@ def cli_build_monthly_rates(
         help="需强制刷新 YYYY-MM，可多次传参",
     ),
     rebuild: bool = typer.Option(False, help="忽略现有 CSV 全量重建"),
-    log_level: str = typer.Option("INFO", help="日志级别 (DEBUG/INFO/WARNING/ERROR)"),
     http_debug: bool = typer.Option(
         False,
         "--http-debug",
@@ -179,12 +221,6 @@ def cli_build_monthly_rates(
     """构建/补齐每月首个工作日 USD/CNY 中间价（仅月度，无每日缓存）。"""
 
     logger = get_logger()
-
-    level_value = getattr(logging, log_level.upper(), None)
-    if not isinstance(level_value, int):
-        raise typer.BadParameter(f"Unknown log level: {log_level}")
-    logging.getLogger().setLevel(level_value)
-
     if http_debug:
         try:
             import http.client as http_client
@@ -196,8 +232,9 @@ def cli_build_monthly_rates(
         logging.getLogger("urllib3").propagate = True
 
     logger.info(
-        "Starting monthly build: start=%s output=%s refresh=%s rebuild=%s http_debug=%s connect_timeout=%.2f read_timeout=%.2f total_deadline=%.2f ip_family=%s",
+        "Starting monthly build: start=%s end=%s output=%s refresh=%s rebuild=%s http_debug=%s connect_timeout=%.2f read_timeout=%.2f total_deadline=%.2f ip_family=%s prefer_source=%s",
         start,
+        end or "<current>",
         output or "data/rates/monthly_usd_cny.csv",
         ",".join(refresh) if refresh else "<none>",
         rebuild,
@@ -206,17 +243,33 @@ def cli_build_monthly_rates(
         read_timeout,
         total_deadline,
         ip_family,
+        prefer_source,
     )
+
+    today = date.today()
+    current_month = today.replace(day=1)
 
     try:
         start_dt = datetime.strptime(start, "%Y-%m")
     except ValueError as exc:  # noqa: BLE001
         raise typer.BadParameter("start must be formatted as YYYY-MM") from exc
-
     start_marker = date(start_dt.year, start_dt.month, 1)
-    current_month = date.today().replace(day=1)
     if start_marker > current_month:
         raise typer.BadParameter("start month cannot be in the future")
+
+    if end is not None:
+        try:
+            end_dt = datetime.strptime(end, "%Y-%m")
+        except ValueError as exc:  # noqa: BLE001
+            raise typer.BadParameter("end must be formatted as YYYY-MM") from exc
+        end_marker = date(end_dt.year, end_dt.month, 1)
+    else:
+        end_marker = current_month
+
+    if end_marker > current_month:
+        raise typer.BadParameter("end month cannot be in the future")
+    if start_marker > end_marker:
+        raise typer.BadParameter("start month cannot exceed end month")
 
     output_path = output or Path("data/rates/monthly_usd_cny.csv")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,11 +288,11 @@ def cli_build_monthly_rates(
         if output_path.exists():
             output_path.unlink()
         cursor = start_marker
-        while cursor <= current_month:
+        while cursor <= end_marker:
             months_to_process.add((cursor.year, cursor.month))
             cursor = cursor.replace(year=cursor.year + 1, month=1) if cursor.month == 12 else cursor.replace(month=cursor.month + 1)
     else:
-        months_to_process.update(plan_missing_months(output_path, start_marker, date.today()))
+        months_to_process.update(plan_missing_months(output_path, start_marker, end_marker))
 
     for item in refresh:
         try:
@@ -267,7 +320,7 @@ def cli_build_monthly_rates(
     try:
         for year, month in ordered_months:
             try:
-                rate, source_date, rate_source, fallback_used = fetch_month_rate(
+                result = fetch_month_rate(
                     year,
                     month,
                     holidays=holidays,
@@ -288,16 +341,18 @@ def cli_build_monthly_rates(
                 pending.append((year, month, str(exc), prefer_source))
                 continue
 
-            rate_str = format_rate(rate)
-            upsert_csv(output_path, [(year, month, rate_str, source_date)])
+            rate_str = format_rate(result.mid_rate)
+            upsert_csv(output_path, [result.to_csv_row()])
             logger.info(
-                "Stored %04d-%02d rate %s from %s via %s (fallback=%s) into %s",
-                year,
-                month,
+                "Stored %04d-%02d rate %s query_date=%s source_date=%s source=%s fallback=%s request_date=%s into %s",
+                result.year,
+                result.month,
                 rate_str,
-                source_date,
-                rate_source,
-                fallback_used,
+                result.query_date,
+                result.source_date,
+                result.rate_source,
+                result.fallback_used,
+                result.request_date,
                 output_path,
             )
             success.append((year, month))

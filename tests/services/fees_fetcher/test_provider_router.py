@@ -75,3 +75,49 @@ def test_router_all_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RateLookupError):
         provider_router.fetch_with_fallback("2025-09-15")
 
+
+def test_router_meta_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    pbc_client.reset_metrics()
+
+    def ok_pbc(target: str, *, manage_cycle: bool = False):  # type: ignore[override]
+        return Decimal("7.0100"), "2025-08-01", "pbc_notice"
+
+    def ok_cfets(_sess, target: str):  # type: ignore[override]
+        return Decimal("7.0200"), "2025-08-02", "cfets_notice"
+
+    def ok_safe(_sess, target: str):  # type: ignore[override]
+        return Decimal("7.0300"), "2025-08-03", "safe_portal"
+
+    monkeypatch.setattr(provider_router, "fetch_pbc_midpoint", ok_pbc)
+    monkeypatch.setattr(provider_router.cfets_provider, "get_usd_cny_midpoint_from_notice", ok_cfets)
+    monkeypatch.setattr(provider_router.safe_provider, "get_usd_cny_midpoint_from_portal", ok_safe)
+
+    # Direct PBOC path
+    rate, source_date, rate_source, fallback_used = provider_router.fetch_with_fallback(
+        "2025-08-01",
+        prefer_source="pbc",
+    )
+    assert rate == Decimal("7.0100")
+    assert source_date == "2025-08-01"
+    assert rate_source == "pbc_notice"
+    assert fallback_used == "none"
+
+    # CFETS preference bypasses PBOC
+    rate, source_date, rate_source, fallback_used = provider_router.fetch_with_fallback(
+        "2025-08-01",
+        prefer_source="cfets",
+    )
+    assert rate == Decimal("7.0200")
+    assert source_date == "2025-08-02"
+    assert rate_source == "cfets_notice"
+    assert fallback_used == "none"
+
+    # SAFE path with announcement date different from query should mark forward fallback
+    rate, source_date, rate_source, fallback_used = provider_router.fetch_with_fallback(
+        "2025-08-01",
+        prefer_source="safe",
+    )
+    assert rate == Decimal("7.0300")
+    assert source_date == "2025-08-03"
+    assert rate_source == "safe_portal"
+    assert fallback_used == "forward"

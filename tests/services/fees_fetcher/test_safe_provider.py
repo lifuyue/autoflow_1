@@ -66,6 +66,33 @@ def test_safe_portal_forward_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert source == "safe_portal"
 
 
+def test_safe_portal_handles_rounding(monkeypatch: pytest.MonkeyPatch) -> None:
+    html = """
+    <html>
+      <body>
+        <table id="InfoTable">
+          <tr><th>日期</th><th>美元</th></tr>
+          <tr><td>2025-09-04</td><td>710.52</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        pbc_client,
+        "_request",
+        lambda url: SimpleNamespace(text=html),
+    )
+
+    rate, source_date, source = safe_provider.get_usd_cny_midpoint_from_portal(
+        None, "2025-09-01"
+    )
+
+    assert rate == Decimal("7.1052")
+    assert source_date == "2025-09-04"
+    assert source == "safe_portal"
+
+
 def test_safe_portal_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     empty_html = "<html><body><table id='InfoTable'><tr><th>日期</th><th>美元</th></tr></table></body></html>"
 
@@ -77,4 +104,3 @@ def test_safe_portal_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(LookupError):
         safe_provider.get_usd_cny_midpoint_from_portal(None, "2025-09-15")
-
