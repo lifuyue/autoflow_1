@@ -316,6 +316,21 @@ def cli_build_monthly_rates(
     holidays, workdays = load_cn_calendar()
     success: list[tuple[int, int]] = []
     pending: list[tuple[int, int, str, str]] = []
+    buffered_rows: list[dict[str, str]] = []
+
+    # Buffer rows so we touch the CSV only once; fall back to flushing in the
+    # finally block to preserve partial progress when unexpected errors occur.
+    def _persist_buffer(reason: str) -> None:
+        if not buffered_rows:
+            return
+        upsert_csv(output_path, buffered_rows)
+        logger.info(
+            "%s persisted %d monthly rows into %s",
+            reason,
+            len(buffered_rows),
+            output_path,
+        )
+        buffered_rows.clear()
 
     try:
         for year, month in ordered_months:
@@ -342,9 +357,8 @@ def cli_build_monthly_rates(
                 continue
 
             rate_str = format_rate(result.mid_rate)
-            upsert_csv(output_path, [result.to_csv_row()])
             logger.info(
-                "Stored %04d-%02d rate %s query_date=%s source_date=%s source=%s fallback=%s request_date=%s into %s",
+                "Buffered %04d-%02d rate %s query_date=%s source_date=%s source=%s fallback=%s request_date=%s",
                 result.year,
                 result.month,
                 rate_str,
@@ -353,9 +367,14 @@ def cli_build_monthly_rates(
                 result.rate_source,
                 result.fallback_used,
                 result.request_date,
-                output_path,
             )
+            buffered_rows.append(result.to_csv_row())
             success.append((year, month))
+
+        if buffered_rows:
+            _persist_buffer("Successfully")
+        else:
+            logger.info("No new monthly rows to persist; CSV unchanged.")
 
         logger.info(
             "Monthly build finished: success=%d pending=%d output=%s",
@@ -373,6 +392,12 @@ def cli_build_monthly_rates(
                     message,
                 )
     finally:
+        if buffered_rows:
+            try:
+                _persist_buffer("Safely")
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.error("Unable to persist buffered monthly rows: %s", exc)
+                buffered_rows.clear()
         _log_fetch_metrics(command_started)
         pbc_client.reset_request_config()
         _cleanup_http_debug(http_debug)
