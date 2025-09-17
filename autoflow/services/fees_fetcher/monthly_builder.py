@@ -29,6 +29,16 @@ CANONICAL_FIELDS = (
     "fallback_used",
 )
 
+CANONICAL_TO_OUTPUT = {
+    "year": "年份",
+    "month": "月份",
+    "mid_rate": "中间价",
+    "query_date": "查询日期",
+    "source_date": "来源日期",
+    "rate_source": "数据源",
+    "fallback_used": "回退策略",
+}
+
 FIELD_ALIASES: dict[str, set[str]] = {
     "year": {"year", "年份"},
     "month": {"month", "月份"},
@@ -39,15 +49,7 @@ FIELD_ALIASES: dict[str, set[str]] = {
     "fallback_used": {"fallback_used", "回退策略", "fallback"},
 }
 
-OUTPUT_HEADER = [
-    "年份",
-    "月份",
-    "中间价",
-    "查询日期",
-    "来源日期",
-    "数据源",
-    "回退策略",
-]
+OUTPUT_HEADER = [CANONICAL_TO_OUTPUT[field] for field in CANONICAL_FIELDS]
 
 
 @dataclass(frozen=True)
@@ -85,59 +87,51 @@ def _normalize_header_cell(cell: str) -> str:
     return cell.strip()
 
 
-def _resolve_header_map(header: Sequence[str]) -> dict[str, int]:
-    mapping: dict[str, int] = {}
-    for idx, cell in enumerate(header):
-        normalized = _normalize_header_cell(cell)
-        for field, aliases in FIELD_ALIASES.items():
-            if normalized in aliases and field not in mapping:
-                mapping[field] = idx
-                break
-    return mapping
+_ALIAS_LOOKUP: dict[str, str] = {}
+for canonical, aliases in FIELD_ALIASES.items():
+    for alias in aliases:
+        normalized_alias = alias.strip()
+        _ALIAS_LOOKUP.setdefault(normalized_alias, canonical)
+        _ALIAS_LOOKUP.setdefault(normalized_alias.lower(), canonical)
 
 
-def _is_header_row(cells: Sequence[str], mapping: Mapping[str, int]) -> bool:
-    if not mapping:
-        return False
-    # Treat as header when year/month columns are non-numeric labels.
-    for field in ("year", "month"):
-        idx = mapping.get(field)
-        if idx is None or idx >= len(cells):
+def _canonical_field_for(raw_key: str | None) -> str | None:
+    if raw_key is None:
+        return None
+    token = _normalize_header_cell(str(raw_key))
+    return _ALIAS_LOOKUP.get(token) or _ALIAS_LOOKUP.get(token.lower())
+
+
+def _canonicalize_mapping(payload: Mapping[str, object]) -> dict[str, object]:
+    canonical: dict[str, object] = {}
+    for key, value in payload.items():
+        canonical_key = _canonical_field_for(key)
+        if not canonical_key:
             continue
-        token = _normalize_header_cell(cells[idx])
-        if token.isdigit():
-            return False
-    return True
-
-
-def _row_to_record(cells: Sequence[str], mapping: Mapping[str, int]) -> dict[str, str]:
-    record: dict[str, str] = {}
-    for field in CANONICAL_FIELDS:
-        idx = mapping.get(field)
-        if idx is None or idx >= len(cells):
-            continue
-        record[field] = _normalize_header_cell(cells[idx])
-    return record
+        canonical[canonical_key] = value
+    return canonical
 
 
 def _ensure_all_fields(
-    record: Mapping[str, str],
+    record: Mapping[str, object],
     *,
     year: int,
     month: int,
 ) -> dict[str, str]:
+    canonical_record = _canonicalize_mapping(record)
     normalized = {field: "" for field in CANONICAL_FIELDS}
+
     for field in CANONICAL_FIELDS:
-        value = record.get(field, "")
+        value = canonical_record.get(field)
         if value is None:
             continue
-        text = value.strip()
+        text = str(value).strip()
         if not text:
             continue
         normalized[field] = text
 
-    normalized["year"] = str(year)
-    normalized["month"] = f"{month:02d}"
+    normalized["year"] = str(int(year))
+    normalized["month"] = f"{int(month):02d}"
 
     if not normalized["query_date"]:
         normalized["query_date"] = normalized.get("source_date", "")
@@ -153,40 +147,55 @@ def _load_existing_records(csv_path: Path) -> dict[tuple[int, int], dict[str, st
         return records
 
     with open(csv_path, "r", encoding="utf-8", newline="") as handle:
-        reader = csv.reader(handle)
-        try:
-            first_row = next(reader)
-        except StopIteration:
-            return records
+        rows = list(csv.reader(handle))
 
-        header = [_normalize_header_cell(cell) for cell in first_row]
-        mapping = _resolve_header_map(header)
+    if not rows:
+        return records
 
-        if not _is_header_row(header, mapping):
-            # Treat the first row as data; estimate default mapping for legacy files.
-            if not mapping:
-                mapping = {"year": 0, "month": 1, "mid_rate": 2, "source_date": 3}
-            rows_iter = [header]
-        else:
-            rows_iter = []
+    header_cells = [_normalize_header_cell(cell) for cell in rows[0]]
+    header_mapping: dict[str, int] = {}
+    for idx, cell in enumerate(header_cells):
+        canonical = _canonical_field_for(cell)
+        if canonical and canonical not in header_mapping:
+            header_mapping[canonical] = idx
 
-        rows_iter.extend(reader)
+    def _has_numeric_year_month() -> bool:
+        year_idx = header_mapping.get("year")
+        month_idx = header_mapping.get("month")
+        year_numeric = year_idx is not None and year_idx < len(header_cells) and header_cells[year_idx].isdigit()
+        month_numeric = month_idx is not None and month_idx < len(header_cells) and header_cells[month_idx].isdigit()
+        return year_numeric and month_numeric
 
-    for raw_row in rows_iter:
-        if not raw_row:
+    header_is_present = bool(header_mapping) and not _has_numeric_year_month()
+
+    data_rows = rows[1:] if header_is_present else rows
+    header_aliases = header_cells if header_is_present else None
+
+    for raw_row in data_rows:
+        if not raw_row or not any(cell.strip() for cell in raw_row):
             continue
         cells = [_normalize_header_cell(cell) for cell in raw_row]
-        record = _row_to_record(cells, mapping)
+        if header_aliases is not None:
+            raw_mapping = {
+                header_aliases[idx]: cells[idx]
+                for idx in range(min(len(header_aliases), len(cells)))
+            }
+        else:
+            raw_mapping = {
+                CANONICAL_FIELDS[idx]: cells[idx]
+                for idx in range(min(len(CANONICAL_FIELDS), len(cells)))
+            }
+        record = _canonicalize_mapping(raw_mapping)
         year_raw = record.get("year")
         month_raw = record.get("month")
+        if year_raw is None or month_raw is None:
+            LOGGER.warning("Skipping CSV row missing year/month: %s", raw_row)
+            continue
         try:
-            year_val = int(year_raw) if year_raw is not None else None
-            month_val = int(month_raw) if month_raw is not None else None
+            year_val = int(str(year_raw).strip())
+            month_val = int(str(month_raw).strip())
         except (TypeError, ValueError):
             LOGGER.warning("Skipping malformed CSV row during merge: %s", raw_row)
-            continue
-        if year_val is None or month_val is None:
-            LOGGER.warning("Skipping CSV row missing year/month: %s", raw_row)
             continue
         records[(year_val, month_val)] = _ensure_all_fields(record, year=year_val, month=month_val)
 
@@ -195,25 +204,28 @@ def _load_existing_records(csv_path: Path) -> dict[tuple[int, int], dict[str, st
 
 def _normalize_row_input(row: Mapping[str, object]) -> dict[str, str]:
     normalized = {field: "" for field in CANONICAL_FIELDS}
-    for field in CANONICAL_FIELDS:
-        if field not in row:
-            continue
-        value = row[field]
+    canonical_row = _canonicalize_mapping(row)
+
+    for field, value in canonical_row.items():
         if value is None:
             continue
         if field == "year":
             try:
-                normalized[field] = str(int(value))
+                normalized[field] = str(int(str(value).strip()))
             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
                 raise ValueError(f"Invalid year value: {value!r}") from exc
             continue
         if field == "month":
             try:
-                normalized[field] = f"{int(value):02d}"
+                month_int = int(str(value).strip())
             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
                 raise ValueError(f"Invalid month value: {value!r}") from exc
+            normalized[field] = f"{month_int:02d}"
             continue
-        normalized[field] = str(value).strip()
+        text = str(value).strip()
+        if not text:
+            continue
+        normalized[field] = text
 
     if not normalized["fallback_used"]:
         normalized["fallback_used"] = "none"
@@ -386,8 +398,11 @@ def upsert_csv(csv_path: Path, rows: Sequence[Mapping[str, object]]) -> None:
     """Persist or update monthly rate rows."""
 
     existing = _load_existing_records(csv_path)
+    consumed = 0
+    changed = 0
 
     for row in rows:
+        consumed += 1
         normalized = _normalize_row_input(row)
         year_str = normalized.get("year")
         month_str = normalized.get("month")
@@ -399,22 +414,33 @@ def upsert_csv(csv_path: Path, rows: Sequence[Mapping[str, object]]) -> None:
         except ValueError as exc:  # pragma: no cover - defensive guard
             raise ValueError(f"Invalid year/month in row: {row!r}") from exc
 
-        existing[(year_val, month_val)] = _ensure_all_fields(
-            normalized,
-            year=year_val,
-            month=month_val,
-        )
+        record = _ensure_all_fields(normalized, year=year_val, month=month_val)
+        key = (year_val, month_val)
+        if existing.get(key) != record:
+            existing[key] = record
+            changed += 1
 
     ordered_keys = sorted(existing.keys())
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = csv_path.with_suffix(csv_path.suffix + ".tmp")
     with open(tmp_path, "w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(OUTPUT_HEADER)
+        writer = csv.DictWriter(handle, fieldnames=OUTPUT_HEADER)
+        writer.writeheader()
         for key in ordered_keys:
             record = existing[key]
-            writer.writerow([record.get(field, "") for field in CANONICAL_FIELDS])
+            writer.writerow({
+                CANONICAL_TO_OUTPUT[field]: record.get(field, "")
+                for field in CANONICAL_FIELDS
+            })
     tmp_path.replace(csv_path)
+
+    LOGGER.info(
+        "CSV upsert done: path=%s consumed=%d changed=%d total_rows=%d",
+        csv_path,
+        consumed,
+        changed,
+        len(ordered_keys),
+    )
 
 
 def format_rate(rate: Decimal) -> str:
