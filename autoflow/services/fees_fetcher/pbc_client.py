@@ -65,6 +65,8 @@ class FetchMetrics:
     dns_a_count: int = 0
     dns_aaaa_count: int = 0
     ip_family_used: str = "auto"
+    rate_source: str | None = None
+    fallback_used: str | None = None
 
 
 DEFAULT_CONFIG = RequestConfig()

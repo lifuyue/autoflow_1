@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from autoflow.services.fees_fetcher import PBOCRateProvider
 from autoflow.services.fees_fetcher.monthly_builder import (
     fetch_month_rate,
     first_business_day,
@@ -17,22 +16,6 @@ from autoflow.services.fees_fetcher.monthly_builder import (
     upsert_csv,
 )
 from autoflow.services.form_processor.providers import RateLookupError
-
-
-class StubRateProvider(PBOCRateProvider):
-    """Stub provider with deterministic responses for testing."""
-
-    def __init__(self, mapping: dict[str, Decimal]) -> None:
-        super().__init__()
-        self._mapping = mapping
-
-    def get_rate(self, date: str, from_ccy: str, to_ccy: str) -> Decimal:  # type: ignore[override]
-        if (from_ccy, to_ccy) != ("USD", "CNY"):
-            raise NotImplementedError
-        try:
-            return self._mapping[date]
-        except KeyError as exc:
-            raise RateLookupError("missing") from exc
 
 
 def test_first_business_day_basic() -> None:
@@ -58,23 +41,59 @@ def test_plan_missing_months(tmp_path: Path) -> None:
 
 
 def test_fetch_month_rate_forward_fallback() -> None:
-    provider = StubRateProvider({"2023-01-03": Decimal("6.8899")})
-    rate, source_date = fetch_month_rate(2023, 1, provider)
+    mapping: dict[str, tuple[Decimal, str, str, str]] = {
+        "2023-01-03": (Decimal("6.8899"), "2023-01-03", "cfets_notice", "cfets")
+    }
+
+    def lookup(date: str, prefer: str) -> tuple[Decimal, str, str, str]:
+        try:
+            return mapping[date]
+        except KeyError as exc:
+            raise RateLookupError("missing") from exc
+
+    rate, source_date, rate_source, fallback_used = fetch_month_rate(
+        2023,
+        1,
+        lookup=lookup,
+    )
     assert rate == Decimal("6.8899")
     assert source_date == "2023-01-03"
+    assert rate_source == "cfets_notice"
+    assert fallback_used == "cfets"
 
 
 def test_fetch_month_rate_backward_fallback() -> None:
-    provider = StubRateProvider({"2023-07-01": Decimal("7.1000")})
-    rate, source_date = fetch_month_rate(2023, 7, provider)
+    mapping: dict[str, tuple[Decimal, str, str, str]] = {
+        "2023-07-01": (Decimal("7.1000"), "2023-07-01", "safe_portal", "forward")
+    }
+
+    def lookup(date: str, prefer: str) -> tuple[Decimal, str, str, str]:
+        if date == "2023-07-03":
+            raise RateLookupError("missing forward")
+        if date == "2023-07-04":
+            raise RateLookupError("missing forward")
+        try:
+            return mapping[date]
+        except KeyError as exc:
+            raise RateLookupError("missing") from exc
+
+    rate, source_date, rate_source, fallback_used = fetch_month_rate(
+        2023,
+        7,
+        lookup=lookup,
+    )
     assert rate == Decimal("7.1000")
     assert source_date == "2023-07-01"
+    assert rate_source == "safe_portal"
+    assert fallback_used == "forward"
 
 
 def test_fetch_month_rate_failures() -> None:
-    provider = StubRateProvider({})
+    def lookup(date: str, prefer: str) -> tuple[Decimal, str, str, str]:
+        raise RateLookupError("missing")
+
     with pytest.raises(RateLookupError):
-        fetch_month_rate(2024, 5, provider)
+        fetch_month_rate(2024, 5, lookup=lookup)
 
 
 def test_upsert_csv_merges(tmp_path: Path) -> None:

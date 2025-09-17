@@ -13,7 +13,7 @@ from typing import List, Tuple
 import typer
 
 from autoflow.core.logger import get_logger
-from autoflow.services.fees_fetcher import PBOCRateProvider, pbc_client
+from autoflow.services.fees_fetcher import fetch_with_fallback, pbc_client
 from autoflow.services.fees_fetcher.monthly_builder import (
     fetch_month_rate,
     format_rate,
@@ -25,6 +25,7 @@ from autoflow.services.form_processor import FormProcessConfig, process_forms
 from autoflow.services.form_processor.providers import RateLookupError, StaticRateProvider
 
 ALLOWED_IP_FAMILIES = {"auto", "4", "6"}
+PREFERRED_SOURCES = {"auto", "pbc", "cfets", "safe"}
 
 app = typer.Typer(help="Utility CLI for AutoFlow services.")
 
@@ -33,6 +34,13 @@ def _validate_ip_family(value: str) -> str:
     value = value.lower()
     if value not in ALLOWED_IP_FAMILIES:
         raise typer.BadParameter("ip-family must be one of auto, 4, 6")
+    return value
+
+
+def _validate_prefer_source(value: str) -> str:
+    value = value.lower()
+    if value not in PREFERRED_SOURCES:
+        raise typer.BadParameter("prefer-source must be one of auto, pbc, cfets, safe")
     return value
 
 
@@ -45,6 +53,11 @@ def cli_get_rate(
     read_timeout: float = typer.Option(8.0, help="Read timeout (seconds)", show_default=True),
     total_deadline: float = typer.Option(30.0, help="Total deadline per lookup (seconds)", show_default=True),
     ip_family: str = typer.Option("auto", help="IP family preference (auto/4/6)", callback=_validate_ip_family),
+    prefer_source: str = typer.Option(
+        "auto",
+        help="Preferred rate source (auto/pbc/cfets/safe)",
+        callback=_validate_prefer_source,
+    ),
 ) -> None:
     """Fetch USD/CNY central parity from PBOC."""
 
@@ -66,12 +79,13 @@ def cli_get_rate(
         ip_family=ip_family,
     )
 
-    provider = PBOCRateProvider()
     started = time.monotonic()
-    rate: Decimal | None = None
+    result: tuple[Decimal, str, str, str] | None = None
     exit_code = 0
     try:
-        rate = provider.get_rate(date_obj.isoformat(), from_code, to_code)
+        if (from_code, to_code) != ("USD", "CNY"):
+            raise typer.BadParameter("Only USD/CNY pairs are supported")
+        result = fetch_with_fallback(date_obj.isoformat(), prefer_source=prefer_source)
     except NotImplementedError as exc:  # noqa: BLE001 - surfaces to CLI
         raise typer.BadParameter(str(exc)) from exc
     except pbc_client.CertHostnameMismatch as exc:
@@ -86,7 +100,7 @@ def cli_get_rate(
         duration = time.monotonic() - started
         metrics = pbc_client.get_metrics()
         logger.info(
-            "Fetch summary: duration=%.2fs attempts=%d success=%d failure=%d deadline=%d upgrade=%d fallback=%d early_stop=%s tls_hostname_mismatch=%d dns_a_count=%d dns_aaaa_count=%d ip_family=%s",
+            "Fetch summary: duration=%.2fs attempts=%d success=%d failure=%d deadline=%d upgrade=%d fallback=%d early_stop=%s tls_hostname_mismatch=%d dns_a_count=%d dns_aaaa_count=%d ip_family=%s rate_source=%s fallback_used=%s",
             duration,
             metrics.request_attempts,
             metrics.request_successes,
@@ -99,11 +113,17 @@ def cli_get_rate(
             metrics.dns_a_count,
             metrics.dns_aaaa_count,
             metrics.ip_family_used,
+            metrics.rate_source or "unknown",
+            metrics.fallback_used or "none",
         )
         pbc_client.reset_request_config()
 
-    if rate is not None and exit_code == 0:
-        typer.echo(str(rate))
+    if result is not None and exit_code == 0:
+        rate, source_date, rate_source, fallback_used = result
+        typer.echo(
+            f"{date_obj.isoformat()} USD/CNY midpoint = {rate:.4f} (source={rate_source}, "
+            f"source_date={source_date}, fallback={fallback_used})"
+        )
     if exit_code:
         raise typer.Exit(code=exit_code)
 
@@ -150,6 +170,11 @@ def cli_build_monthly_rates(
     read_timeout: float = typer.Option(8.0, help="读取超时（秒）", show_default=True),
     total_deadline: float = typer.Option(30.0, help="单次抓取总时长上限（秒）", show_default=True),
     ip_family: str = typer.Option("auto", help="IP 族偏好 (auto/4/6)", callback=_validate_ip_family),
+    prefer_source: str = typer.Option(
+        "auto",
+        help="首选数据源 (auto/pbc/cfets/safe)",
+        callback=_validate_prefer_source,
+    ),
 ) -> None:
     """构建/补齐每月首个工作日 USD/CNY 中间价（仅月度，无每日缓存）。"""
 
@@ -236,20 +261,18 @@ def cli_build_monthly_rates(
     )
 
     holidays, workdays = load_cn_calendar()
-    provider = PBOCRateProvider()
-
     success: list[tuple[int, int]] = []
-    pending: list[tuple[int, int, str]] = []
+    pending: list[tuple[int, int, str, str]] = []
 
     try:
         for year, month in ordered_months:
             try:
-                rate, source_date = fetch_month_rate(
+                rate, source_date, rate_source, fallback_used = fetch_month_rate(
                     year,
                     month,
-                    provider,
                     holidays=holidays,
                     workdays=workdays,
+                    prefer_source=prefer_source,
                 )
             except pbc_client.CertHostnameMismatch as exc:
                 logger.warning(
@@ -258,21 +281,23 @@ def cli_build_monthly_rates(
                     month,
                     json.dumps(exc.diagnostics, ensure_ascii=False),
                 )
-                pending.append((year, month, "CERT_HOSTNAME_MISMATCH"))
+                pending.append((year, month, "CERT_HOSTNAME_MISMATCH", prefer_source))
                 continue
             except RateLookupError as exc:
                 logger.warning("%04d-%02d pending (no rate): %s", year, month, exc)
-                pending.append((year, month, str(exc)))
+                pending.append((year, month, str(exc), prefer_source))
                 continue
 
             rate_str = format_rate(rate)
             upsert_csv(output_path, [(year, month, rate_str, source_date)])
             logger.info(
-                "Stored %04d-%02d rate %s from %s into %s",
+                "Stored %04d-%02d rate %s from %s via %s (fallback=%s) into %s",
                 year,
                 month,
                 rate_str,
                 source_date,
+                rate_source,
+                fallback_used,
                 output_path,
             )
             success.append((year, month))
@@ -284,8 +309,14 @@ def cli_build_monthly_rates(
             output_path,
         )
         if pending:
-            for year, month, message in pending:
-                logger.warning("Pending month %04d-%02d: %s", year, month, message)
+            for year, month, message, source in pending:
+                logger.warning(
+                    "Pending month %04d-%02d (prefer=%s): %s",
+                    year,
+                    month,
+                    source,
+                    message,
+                )
     finally:
         _log_fetch_metrics(command_started)
         pbc_client.reset_request_config()

@@ -7,18 +7,22 @@ import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import yaml
 
 from autoflow.services.form_processor.providers import RateLookupError
 
+from . import provider_router
 from .pbc_client import CertHostnameMismatch
-from .pbc_provider import PBOCRateProvider
 
 LOGGER = logging.getLogger(__name__)
 
 _HEADER = ("年份", "月份", "中间价", "来源日期")
+
+
+def _default_lookup(target: str, prefer: str) -> tuple[Decimal, str, str, str]:
+    return provider_router.fetch_with_fallback(target, prefer_source=prefer)
 
 
 def _is_business_day(
@@ -96,12 +100,13 @@ def plan_missing_months(csv_path: Path, start: date, today: date) -> list[tuple[
 def fetch_month_rate(
     year: int,
     month: int,
-    provider: PBOCRateProvider,
     *,
     holidays: set[str] | None = None,
     workdays: set[str] | None = None,
-) -> tuple[Decimal, str]:
-    """Retrieve a monthly rate using the configured provider."""
+    prefer_source: str = "auto",
+    lookup: Callable[[str, str], tuple[Decimal, str, str, str]] = _default_lookup,
+) -> tuple[Decimal, str, str, str]:
+    """Retrieve a monthly rate using the configured lookup strategy."""
 
     first_day_str = first_business_day(year, month, holidays=holidays, workdays=workdays)
     first_day = datetime.strptime(first_day_str, "%Y-%m-%d").date()
@@ -146,15 +151,25 @@ def fetch_month_rate(
         tried.add(iso)
         LOGGER.debug("Attempting rate lookup for %s", iso)
         try:
-            rate = provider.get_rate(iso, "USD", "CNY")
+            rate, source_date, rate_source, fallback_used = lookup(iso, prefer_source)
         except CertHostnameMismatch:
             raise
         except RateLookupError as exc:
             LOGGER.debug("Rate unavailable for %s: %s", iso, exc)
             continue
-        return rate, iso
+        LOGGER.info(
+            "Monthly fetch success: request_date=%s source_date=%s source=%s fallback=%s",
+            iso,
+            source_date,
+            rate_source,
+            fallback_used,
+        )
+        return rate, source_date, rate_source, fallback_used
 
-    raise RateLookupError(f"USD/CNY rate unavailable for {year}-{month:02d}", original_date=f"{year}-{month:02d}-01")
+    raise RateLookupError(
+        f"USD/CNY rate unavailable for {year}-{month:02d}",
+        original_date=f"{year}-{month:02d}-01",
+    )
 
 
 def load_cn_calendar() -> tuple[set[str], set[str]]:

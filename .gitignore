@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# Explicit test pycache directories (requested)
+tests/__pycache__/
+autoflow/tests/__pycache__/
+
 # Python extensions
 *.pyd
 *.so

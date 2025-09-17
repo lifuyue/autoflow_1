@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,7 @@ from typer.testing import CliRunner
 from autoflow.cli import app
 from autoflow.services.fees_fetcher.pbc_client import CertHostnameMismatch
 from autoflow.services.fees_fetcher import pbc_client
-from autoflow.services.fees_fetcher.pbc_provider import PBOCRateProvider
+from autoflow.services.fees_fetcher import provider_router
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +46,10 @@ def test_build_month_cli_pending(
     caplog: pytest.LogCaptureFixture,
     tls_error: CertHostnameMismatch,
 ) -> None:
-    def fake_get_rate(self, date: str, from_ccy: str, to_ccy: str) -> Decimal:  # noqa: D401
+    def raise_tls(*_args, **_kwargs):
         raise tls_error
 
-    monkeypatch.setattr(PBOCRateProvider, "get_rate", fake_get_rate, raising=False)
+    monkeypatch.setattr(provider_router, "fetch_with_fallback", raise_tls)
 
     caplog.set_level("INFO")
     result = runner.invoke(
@@ -69,10 +68,10 @@ def test_build_month_cli_pending(
 
 
 def test_get_rate_cli_exits_with_tls_diagnostics(monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tls_error: CertHostnameMismatch) -> None:
-    def fake_get_rate(self, date: str, from_ccy: str, to_ccy: str) -> Decimal:  # noqa: D401
+    def raise_tls(*_args, **_kwargs):
         raise tls_error
 
-    monkeypatch.setattr(PBOCRateProvider, "get_rate", fake_get_rate, raising=False)
+    monkeypatch.setattr("autoflow.cli.fetch_with_fallback", raise_tls)
 
     result = runner.invoke(
         app,
