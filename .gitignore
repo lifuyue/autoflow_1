@@ -1,7 +1,9 @@
-# Python
+# Python caches
 __pycache__/
 *.py[cod]
 *.pyo
+
+# Python extensions
 *.pyd
 *.so
 *.dylib

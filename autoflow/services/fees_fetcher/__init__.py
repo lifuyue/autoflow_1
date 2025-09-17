@@ -1,3 +1,5 @@
-"""Fees fetcher service package placeholder."""
+"""Fees fetcher service package."""
 
-__all__ = []
+from .pbc_provider import PBOCRateProvider
+
+__all__ = ["PBOCRateProvider"]

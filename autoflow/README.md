@@ -101,6 +101,30 @@ python -m autoflow.cli process-forms \
 - 非交互模式会将超阈值记录写入 `processed_forms_need_confirm.csv`
 - 执行结果会输出模板文件与 Markdown 报告路径，便于后续自动化
 
+### 汇率获取模块（USD/CNY）
+```
+python -m autoflow.cli get-rate --date 2025-01-02 --from USD --to CNY
+```
+- 输出央行公布的“1美元对人民币 X.XXXX 元”中间价（示例：`7.1879`）。
+- 依赖：`requests`、`beautifulsoup4`、`decimal`（随 Python 标准库）。
+- 流程：优先抓取“人民币汇率中间价公告”最新文章，若当日公告缺失则回退解析“关键图表-人民币汇率中间价对美元”表格。
+- 限制：仅支持 USD/CNY，当日公告缺失时不会自动回退至上一个工作日，央行页面结构调整可能导致需更新解析规则。
+- 网络可调：`--connect-timeout`、`--read-timeout`、`--total-deadline` 控制单次请求与整体时长，`--http-debug` 可结合 `build-monthly-rates` 命令输出底层请求日志。
+
+### 月度中间价缓存（USD/CNY）
+```
+python -m autoflow.cli build-monthly-rates --start 2023-01
+python -m autoflow.cli build-monthly-rates --start 2023-01 --output data/rates/monthly_usd_cny.csv
+python -m autoflow.cli build-monthly-rates --refresh 2025-09 --refresh 2025-10
+python -m autoflow.cli build-monthly-rates --start 2023-01 --rebuild
+```
+- 构建/补齐“每月首个工作日”USD/CNY 人民币中间价缓存，仅保留月度粒度。
+- 缓存 CSV 列顺序固定：`年份,月份,中间价,来源日期`；中间价以四位小数字符串存储，按月升序输出，写入采用临时文件 + 原子替换。
+- 增量策略：默认仅补缺月份；`--refresh YYYY-MM` 可对指定月份强制重抓；`--rebuild` 会删除旧缓存后全量重建。
+- 失败月份仅记录日志“pending”，流程不终止，可后续通过 `--refresh` 补齐。
+- 节假日/调休配置可选：在 `autoflow/config/cn_workdays.yaml` 中维护 `holidays`、`workdays` 列表（示例已提供），用于判定首个工作日与补班日。
+- 网络可调：`--connect-timeout`、`--read-timeout`、`--total-deadline` 可细化连接/读取超时与单次抓取总时长；`--http-debug` 可打开底层 HTTP 诊断。
+
 ## 打包（Windows）
 ```
 # PowerShell/CMD
