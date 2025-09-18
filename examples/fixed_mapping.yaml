@@ -1,0 +1,9 @@
+sheet: Invoice
+start_row: 10
+header_row: 9
+max_rows_per_sheet: 20
+output_name: invoice_out.xlsx
+columns:
+  项目名称: A
+  数量: B
+  金额(USD): C
