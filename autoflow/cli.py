@@ -13,6 +13,7 @@ from typing import List, Tuple
 
 import typer
 
+from autoflow.services.dingdrive import dingdrive_app
 from autoflow.core.logger import get_logger
 from autoflow.services.fees_fetcher import fetch_with_fallback, pbc_client
 from autoflow.services.fees_fetcher.monthly_builder import (
@@ -37,6 +38,7 @@ PROXY_ENV_VARS = (
 )
 
 app = typer.Typer(help="Utility CLI for AutoFlow services.")
+app.add_typer(dingdrive_app, name="dingdrive")
 
 
 def _validate_ip_family(value: str) -> str:

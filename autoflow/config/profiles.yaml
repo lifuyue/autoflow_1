@@ -43,3 +43,16 @@ profiles:
         password_selector: "input[name='password']"
         submit_selector: "button[type='submit']"
 
+
+dingdrive:
+  default:
+    app_key: "${DING_APP_KEY}"
+    app_secret: "${DING_APP_SECRET}"
+    space_id: "YOUR_SPACE_ID"
+    timeout_sec: 10
+    retries:
+      max_attempts: 3
+      backoff_ms: 200
+      max_backoff_ms: 1500
+    verify_tls: true
+    trust_env: false
