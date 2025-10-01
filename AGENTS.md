@@ -1,31 +1,35 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `autoflow/` hosts the Tkinter GUI, orchestration core, service modules, configuration assets, and templates; runtime artefacts live under `autoflow/work/` with the canonical `inbox/`, `out/`, `tmp/`, `logs/`, and `shot/` folders.
-- `autoflow_io/` and `autoflow_persist/` expose shared I/O and persistence utilities consumed by both GUI and CLI flows; treat their public APIs as stable.
-- `tests/` mirrors the package layout with reusable fixtures in `tests/fixtures/`; `data/`, `examples/`, and `tools/` carry sample inputs and helper CLIs that should be refreshed whenever behaviour changes.
+- `autoflow/` hosts the GUI (`main.py`) and orchestrator modules; runtime artefacts stay in `autoflow/work/` (`inbox/`, `out/`, `logs/`, `shot/`, `tmp/`).
+- `autoflow/core/` coordinates pipelines and logging, while `autoflow/services/` holds download, form-processing, upload, and browser automation subpackages.
+- `autoflow_io/` and `autoflow_persist/` provide shared I/O and persistence helpers; expose new utilities through explicit public functions.
+- `tests/` mirrors package names with fixtures in `tests/fixtures/`; reusable inputs live in `data/` and demonstrations in `examples/`.
 
 ## Build, Test, and Development Commands
-- `python -m autoflow.main` launches the GUI and streams logs to `work/logs/`.
-- `python -m autoflow.cli process-forms --help` reveals batch pipelines; rely on the CLI while iterating transformations.
-- `pytest -q` runs the default suite, `pytest -m "not slow"` accelerates feedback, and `pytest -m online` enables network fixtures.
-- `autoflow/build_win.bat` builds `out/auto_flow.exe` through PyInstaller; smoke-test the artifact before release.
+- `python -m venv .venv && pip install -r autoflow/requirements.txt` installs Python 3.13 dependencies.
+- `python -m autoflow.main` launches the Tkinter GUI and streams logs to `autoflow/work/logs/`.
+- `python -m autoflow.cli process-forms --input work/inbox/*.xlsx --output work/out` runs the CLI pipeline for batch jobs.
+- `python -m autoflow.cli get-rate --date 2025-01-02 --from USD --to CNY` fetches USD/CNY reference rates for validations.
+- `pytest -q` runs smoke tests; `pytest -m "not slow"` accelerates local feedback; append `-m online` when network fixtures are enabled.
+- `autoflow/build_win.bat` builds the PyInstaller executable under `dist/AutoFlow.exe`; smoke-test the artifact on Windows.
 
 ## Coding Style & Naming Conventions
-- Target Python 3.13 with four-space indentation, `snake_case` files/functions, PascalCase classes, ALL_CAPS constants, and intent-led widget names.
-- Every callable requires type hints plus Google-style docstrings (Args/Returns/Raises); reserve comments for non-obvious control flow.
-- Log through the shared logger (`logs/agent.log` by default) and keep timestamps ISO 8601 for auditability.
+- Adopt four-space indentation, `snake_case` modules and functions, PascalCase classes, and ALL_CAPS constants; keep widget identifiers descriptive.
+- Type-annotate public callables and prefer Google-style docstrings; only add inline comments when control flow is non-obvious.
+- Log via the shared logger with ISO-8601 timestamps; avoid stray `print` calls outside CLI entrypoints.
 
 ## Testing Guidelines
-- Store feature tests in `tests/` using `test_*.py` files and `test_case_description` names; include Given/When/Then context inline for readability.
-- Use pandas fixtures for data validation and mock browser layers to keep Playwright paths deterministic in CI.
-- Honour markers from `pytest.ini`; label network cases with `@pytest.mark.online` and quarantine expensive paths under `@pytest.mark.slow`.
+- Name specs `test_*.py`; keep Given/When/Then notes inside tests to document intent.
+- Replace external dependencies with fakes or fixtures from `tests/fixtures/`; never exercise live services in CI.
+- Honour `pytest.ini` markers: label long scenarios `@pytest.mark.slow`, network cases `@pytest.mark.online`, and document any additions.
 
 ## Commit & Pull Request Guidelines
-- Prefer concise, action-led commit titles similar to `表格操作模块化`; avoid bundling unrelated files.
-- PRs must outline scope, linked issues, verification steps (`pytest`, CLI or GUI command), and attach UI evidence in `work/shot/` when applicable.
-- Confirm temporary files remain in `tmp/`, document new YAML defaults inline, and flag finance-sensitive changes for additional review.
+- Write imperative, scoped commit titles keyed to the touched module (e.g., `Refine form_processor validations`); avoid bundling unrelated changes.
+- Pull requests should state intent, list verification commands (`python -m autoflow.main`, `pytest -q`, relevant CLI runs), and reference issues or task IDs.
+- Attach GUI screenshots or CLI artefacts from `autoflow/work/shot/` or `autoflow/work/logs/` for UX or pipeline changes, and call out configuration edits.
 
-## Configuration & Resilience Notes
-- Keep secrets out of Git; reference credentials through `autoflow/config/profiles.yaml` and environment variables, never literals.
-- On request failures, persist the fallback artefact in `tmp/` (e.g., `tmp/last_response.json`) and surface next actions via logs or GUI prompts.
+## Security & Configuration Tips
+- Keep credentials in environment variables or secure stores; never hardcode secrets in profiles or templates.
+- Update `autoflow/config/profiles.yaml`, `mapping.yaml`, and `selectors/*.yaml` atomically and document new keys inline.
+- Clear sensitive temporaries in `autoflow/work/tmp/` during reviews and handle fallback artefacts like `last_response.json` as confidential.

@@ -5,11 +5,15 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from pathlib import Path
 import time
+import os
 
 from autoflow.core.logger import get_logger
 from autoflow.core.profiles import load_profiles, Profile
 from autoflow.core.pipeline import Pipeline
 from autoflow.core.errors import AutoFlowError
+from autoflow.services.dingdrive.client import DingDriveClient
+from autoflow.services.dingdrive.config import resolve_config
+from autoflow.services.dingdrive.uploader import UploadProgress
 
 
 class TkTextHandler:
@@ -44,10 +48,12 @@ class App(tk.Tk):
             self.output_dir = tk.StringVar(value=str((_work_dir() / "out").resolve()))
         except Exception:
             self.output_dir = tk.StringVar(value=str(Path("autoflow/work/out").resolve()))
+        self.drive_parent = tk.StringVar(value="root")
 
         self._build_ui()
         self.progress_queue: queue.Queue = queue.Queue()
         self.worker_thread: threading.Thread | None = None
+        self.drive_thread: threading.Thread | None = None
 
     def _build_ui(self):
         # Profile selection
@@ -75,6 +81,14 @@ class App(tk.Tk):
         self.btn_start.pack(side=tk.LEFT)
         ttk.Button(frm_btn, text="退出", command=self.destroy).pack(side=tk.RIGHT)
 
+        # Drive upload controls
+        frm_drive = ttk.Frame(self)
+        frm_drive.pack(fill=tk.X, padx=10, pady=(5, 5))
+        ttk.Label(frm_drive, text="Drive 目录：").pack(side=tk.LEFT)
+        self.ent_drive_parent = ttk.Entry(frm_drive, textvariable=self.drive_parent, width=40)
+        self.ent_drive_parent.pack(side=tk.LEFT, padx=5)
+        ttk.Button(frm_drive, text="上传到 Drive…", command=self._on_upload_drive).pack(side=tk.LEFT)
+
         # Progress
         frm_prog = ttk.Labelframe(self, text="进度")
         frm_prog.pack(fill=tk.X, padx=10, pady=(5, 5))
@@ -96,6 +110,60 @@ class App(tk.Tk):
         d = filedialog.askdirectory(initialdir=self.output_dir.get())
         if d:
             self.output_dir.set(d)
+
+    def _on_upload_drive(self) -> None:
+        if self.drive_thread and self.drive_thread.is_alive():
+            messagebox.showinfo("提示", "Drive 上传正在进行中，请稍候…")
+            return
+        selected_file = filedialog.askopenfilename(title="选择要上传的文件")
+        if not selected_file:
+            return
+
+        file_name = Path(selected_file).name
+        parent_hint = self.drive_parent.get().strip() or "root"
+        profile_hint = os.getenv("AUTOFLOW_DINGDRIVE_PROFILE")
+        current_profile = self.selected_profile_name.get()
+        if not profile_hint and current_profile and current_profile in self.profiles:
+            meta = self.profiles[current_profile].meta or {}
+            profile_hint = meta.get("dingdrive_profile")
+        if profile_hint:
+            profile_hint = profile_hint.strip() or None
+
+        self.progress_queue.put(("Drive 上传", f"准备上传 {file_name}"))
+
+        def progress_cb(progress: UploadProgress) -> None:
+            total = progress.total_bytes or 0
+            percent = 0.0 if not total else (progress.uploaded_bytes / total) * 100
+            detail = (
+                f"{progress.state} {progress.completed_parts}/{progress.total_parts} "
+                f"{progress.uploaded_bytes}/{total} ({percent:.1f}%)"
+            )
+            self.progress_queue.put(("Drive 上传进度", detail))
+
+        def worker() -> None:
+            client: DingDriveClient | None = None
+            try:
+                config = resolve_config(profile_hint)
+                client = DingDriveClient(config, logger=self.logger)
+                target_parent = parent_hint
+                if target_parent.startswith("id:"):
+                    target_parent = target_parent[3:]
+                elif "/" in target_parent:
+                    target_parent = client.ensure_folder(target_parent)
+                else:
+                    target_parent = target_parent or client.resolve_default_parent()
+                file_id = client.upload_file(target_parent, selected_file, progress_cb=progress_cb)
+                self.progress_queue.put(("Drive 上传完成", f"文件ID {file_id}"))
+            except Exception as exc:  # noqa: BLE001 - surface to UI
+                self.logger.exception("Drive upload failed")
+                self.progress_queue.put(("Drive 上传失败", str(exc)))
+            finally:
+                if client is not None:
+                    client.close()
+                self.drive_thread = None
+
+        self.drive_thread = threading.Thread(target=worker, daemon=True)
+        self.drive_thread.start()
 
     def _on_start(self):
         if self.worker_thread and self.worker_thread.is_alive():
@@ -174,6 +242,10 @@ class App(tk.Tk):
                 self.var_detail.set(detail)
                 ts = time.strftime("%H:%M:%S")
                 self.text_handler.write(f"[{ts}] {stage} - {detail}\n")
+                if stage == "Drive 上传失败":
+                    messagebox.showerror("Drive 上传失败", detail)
+                elif stage == "Drive 上传完成":
+                    messagebox.showinfo("Drive 上传完成", detail)
         except queue.Empty:
             pass
         finally:

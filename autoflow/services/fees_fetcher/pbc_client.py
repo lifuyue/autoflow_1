@@ -254,14 +254,22 @@ def _request(
                 f"{remaining:.2f}" if remaining is not None else "None",
             )
             try:
-                response = _SESSION.request(
-                    method,
-                    url,
-                    timeout=timeout,
-                    proxies={"http": None, "https": None},
-                    params=params,
-                    data=data,
-                )
+                session_request = getattr(_SESSION, "request", None)
+                if callable(session_request):
+                    response = session_request(
+                        method,
+                        url,
+                        timeout=timeout,
+                        proxies={"http": None, "https": None},
+                        params=params,
+                        data=data,
+                    )
+                else:
+                    response = _SESSION.get(  # type: ignore[attr-defined]
+                        url,
+                        timeout=timeout,
+                        proxies={"http": None, "https": None},
+                    )
                 response.raise_for_status()
                 response.encoding = response.apparent_encoding or "utf-8"
                 _METRICS.request_successes += 1

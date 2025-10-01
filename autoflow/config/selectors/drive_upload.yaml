@@ -1,0 +1,143 @@
+# 智能网盘上传流程选择器（支持灰度覆盖）
+version: 1
+description: 钉钉网盘上传入口、按钮与反馈选择器
+variants:
+  base:
+    spaces:
+      my_files:
+        labels:
+          - 我的文件
+          - 我的盘
+        anchors:
+          - role: tab
+            name: 我的文件
+          - url_contains: /client/file/home
+      team_files:
+        labels:
+          - 团队文件
+          - 团队盘
+        anchors:
+          - role: tab
+            name: 团队文件
+          - url_contains: /client/file/team
+      enterprise_drive:
+        labels:
+          - 企业盘
+          - 全部文件
+        anchors:
+          - role: tab
+            name_regex: "企业盘|全部文件"
+          - url_contains: /client/file/org
+    frames:
+      drive_workspace:
+        primary:
+          selector: "iframe[src*='/client/file']"
+        fallbacks:
+          - selector: "iframe[name*='drive']"
+          - selector: "iframe[title*='Drive']"
+    actions:
+      new_folder:
+        primary:
+          role: button
+          name_regex: "新建"
+        fallbacks:
+          - role: menuitem
+            name: 新建文件夹
+          - role: button
+            name_regex: "(新建|Create).*文件夹"
+      upload_button:
+        primary:
+          role: button
+          name_regex: "上传|选择文件"
+        fallbacks:
+          - role: button
+            name_regex: "上传文件"
+          - role: menuitem
+            name_regex: "上传|Upload"
+      confirm_button:
+        primary:
+          role: button
+          name_regex: "确定|确认|完成|提交"
+        fallbacks:
+          - role: button
+            name_regex: "开始上传|Upload"
+    inputs:
+      file_input:
+        primary:
+          css: "input[type='file']"
+        fallbacks:
+          - css: "input.ding-drive-uploader"
+          - use_file_chooser: true
+      folder_name:
+        primary:
+          role: textbox
+          name_regex: "(文件夹|Folder).*名称"
+        fallbacks:
+          - role: textbox
+            name_regex: "请输入名称"
+    listing:
+      row_by_name:
+        primary:
+          role: row
+          name_regex_template: "^{name}(?:[\\s（(].*[）)])?$"
+        fallbacks:
+          - role: treeitem
+            name_regex_template: "^{name}(?:[\\s（(].*[）)])?$"
+          - role: link
+            name_regex_template: "^{name}(?:[\\s（(].*[）)])?$"
+    conflicts:
+      dialog:
+        primary:
+          role: dialog
+          name_regex: "同名|冲突|存在"
+      overwrite:
+        primary:
+          role: button
+          name_regex: "覆盖|替换"
+      skip:
+        primary:
+          role: button
+          name_regex: "跳过|保留现有"
+      rename:
+        primary:
+          role: button
+          name_regex: "重命名|保留两者"
+      rename_input:
+        primary:
+          role: textbox
+          name_regex: "文件名|名称"
+      confirm:
+        primary:
+          role: button
+          name_regex: "确认|确定"
+    exports:
+      result_sheet:
+        primary:
+          role: button
+          name_regex: "导出(结果|清单)|下载"
+    metadata:
+      tenant_label:
+        primary:
+          role: link
+          name_regex: ".+"
+        fallbacks:
+          - role: heading
+            name_regex: ".+"
+          - selector: "header [data-tenant]"
+    toasts:
+      success:
+        regex:
+          - "上传成功"
+          - "文件已上传"
+          - "已完成"
+      failure:
+        regex:
+          - "上传失败"
+          - "失败"
+          - "网络异常"
+  gray_release:
+    actions:
+      upload_button:
+        primary:
+          role: button
+          name_regex: '上传\s*(Beta|灰度)'

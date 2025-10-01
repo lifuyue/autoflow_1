@@ -1,129 +1,78 @@
-"""HTTP utilities for DingTalk Drive interactions."""
+"""HTTP utilities for DingTalk Drive integrations."""
 
 from __future__ import annotations
 
 import logging
 import random
-import threading
 import time
-from typing import Iterable, Mapping
+from dataclasses import dataclass
+from typing import Iterable, Mapping, MutableMapping
 
 import requests
 from requests import Response
 from requests.exceptions import ConnectionError, RequestException, Timeout
 
 from autoflow.core.logger import get_logger
-from .config import DingDriveConfig
+
+from .auth import AuthClient
+from .config import DingDriveConfig, load_retry_config, load_timeout
 from .models import DriveAuthError, DriveNotFound, DriveRequestError, DriveRetryableError
 
 LOGGER = get_logger()
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
 AUTHORIZATION_HEADER = "x-acs-dingtalk-access-token"
 USER_AGENT = "Autoflow-DingDrive/1.0"
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+OSS_SIGNATURE_ERRORS = {"SignatureDoesNotMatch", "RequestTimeTooSkewed"}
 
 
-class DingTalkAuth:
-    """Handle DingTalk app credential to access-token exchange."""
+@dataclass(slots=True)
+class RequestDiagnostics:
+    """Captured diagnostics for troubleshooting."""
 
-    def __init__(
-        self,
-        config: DingDriveConfig,
-        *,
-        session: requests.Session | None = None,
-        logger: logging.Logger | None = None,
-    ) -> None:
-        self._config = config
-        self._session = session or requests.Session()
-        self._session.verify = config.verify_tls
-        self._session.trust_env = config.trust_env
-        if config.proxies:
-            self._session.proxies.update(config.proxies)
-        self._session.headers.setdefault("User-Agent", USER_AGENT)
-        self._logger = logger or LOGGER
-        self._token: str | None = None
-        self._expiry: float = 0.0
-        self._lock = threading.Lock()
-
-    def get_access_token(self, *, force_refresh: bool = False) -> str:
-        """Return a valid access token, refreshing if needed."""
-
-        with self._lock:
-            if not force_refresh and self._token and time.monotonic() < self._expiry - 60:
-                return self._token
-            token, ttl = self._fetch_token()
-            self._token = token
-            self._expiry = time.monotonic() + max(ttl, 60)
-            return token
-
-    def invalidate(self) -> None:
-        """Force the next call to fetch a fresh token."""
-
-        with self._lock:
-            self._token = None
-            self._expiry = 0.0
-
-    def _fetch_token(self) -> tuple[str, float]:
-        params = {"appkey": self._config.app_key, "appsecret": self._config.app_secret}
-        try:
-            response = self._session.get(
-                self._config.auth_url,
-                params=params,
-                timeout=self._config.timeout_sec,
-            )
-        except Timeout as exc:
-            raise DriveAuthError("Timeout while requesting DingTalk access token") from exc
-        except RequestException as exc:
-            raise DriveAuthError("Unable to request DingTalk access token") from exc
-
-        if response.status_code != 200:
-            raise DriveAuthError(
-                f"Failed to obtain DingTalk access token: HTTP {response.status_code}",
-                status_code=response.status_code,
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:  # noqa: BLE001
-            raise DriveAuthError("Invalid token response from DingTalk") from exc
-
-        if payload.get("errcode") not in (0, None):
-            raise DriveAuthError(
-                f"DingTalk token error: {payload.get('errmsg', 'unknown error')}",
-                payload=payload,
-            )
-        token = payload.get("access_token")
-        if not token:
-            raise DriveAuthError("access_token missing in DingTalk response")
-        expires_in = float(payload.get("expires_in", 7200))
-        self._logger.debug("Fetched DingTalk access token (expires in %.0fs)", expires_in)
-        return token, expires_in
+    method: str
+    url: str
+    header_keys: tuple[str, ...]
+    status: int | None
+    server_date: str | None
 
 
 class HttpClient:
-    """Requests wrapper with retry and error mapping for DingTalk APIs."""
+    """Request helper wrapping retries, auth, and diagnostics."""
 
     def __init__(
         self,
         config: DingDriveConfig,
         *,
         session: requests.Session | None = None,
+        auth_client: AuthClient | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._config = config
         self._session = session or requests.Session()
         self._session.verify = config.verify_tls
         self._session.trust_env = config.trust_env
-        self._session.headers.setdefault("User-Agent", USER_AGENT)
         if config.proxies:
             self._session.proxies.update(config.proxies)
+        self._session.headers.setdefault("User-Agent", USER_AGENT)
+        self._auth = auth_client or AuthClient(config, session=self._session)
         self._logger = logger or LOGGER
+        self._retry_config = load_retry_config(config)
+        self._timeout = load_timeout(config)
 
     @property
     def session(self) -> requests.Session:
-        """Expose the underlying session for advanced flows (uploads)."""
+        """Expose the reusable session (needed for streaming downloads)."""
 
         return self._session
 
-    def request(
+    @property
+    def auth_client(self) -> AuthClient:
+        """Return the authentication helper used by this client."""
+
+        return self._auth
+
+    def request_openapi(
         self,
         method: str,
         path: str,
@@ -136,25 +85,95 @@ class HttpClient:
         stream: bool = False,
         timeout: float | None = None,
         allow_retry: bool = True,
-        use_base_url: bool = True,
     ) -> Response:
-        """Perform an HTTP request with retry semantics."""
+        """Perform an OpenAPI request with automatic access token injection."""
 
-        url = path if not use_base_url else self._compose_url(path)
-        attempts = self._config.retries.max_attempts
-        backoff = self._config.retries.backoff_ms / 1000.0
-        max_backoff = self._config.retries.max_backoff_ms / 1000.0
-        timeout_value = timeout or self._config.timeout_sec
+        url = self._compose_url(path)
+        return self._request(
+            method,
+            url,
+            headers=headers,
+            params=params,
+            json_body=json_body,
+            data=data,
+            stream=stream,
+            expected_status=expected_status,
+            timeout=timeout,
+            allow_retry=allow_retry,
+            attach_token=True,
+        )
 
-        last_exc: RequestException | None = None
+    def request_oss(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        data: object | None = None,
+        expected_status: Iterable[int] = (200, 201, 204),
+        stream: bool = False,
+        timeout: float | None = None,
+        allow_retry: bool = True,
+    ) -> Response:
+        """Perform a direct OSS request (no token injection)."""
+
+        return self._request(
+            method,
+            url,
+            headers=headers,
+            data=data,
+            stream=stream,
+            expected_status=expected_status,
+            timeout=timeout,
+            allow_retry=allow_retry,
+            attach_token=False,
+        )
+
+    # Internal helpers -------------------------------------------------
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None,
+        params: Mapping[str, str] | None = None,
+        json_body: Mapping[str, object] | None = None,
+        data: object | None,
+        stream: bool,
+        expected_status: Iterable[int],
+        timeout: float | None,
+        allow_retry: bool,
+        attach_token: bool,
+    ) -> Response:
+        attempts = self._retry_config.max_attempts if allow_retry else 1
+        base_backoff = max(0.05, self._retry_config.backoff_ms / 1000.0)
+        max_backoff = max(base_backoff, self._retry_config.max_backoff_ms / 1000.0)
+        timeout_value = timeout or self._timeout
         expected = tuple(expected_status)
+        refresh_token_next = False
 
         for attempt in range(1, attempts + 1):
+            last_error: DriveRetryableError | DriveRequestError | DriveAuthError | None = None
+            request_headers: MutableMapping[str, str] = dict(headers or {})
+            if attach_token:
+                token = self._auth.get_token(force_refresh=refresh_token_next)
+                request_headers[AUTHORIZATION_HEADER] = token
+                refresh_token_next = False
+
+            diagnostics = RequestDiagnostics(
+                method=method,
+                url=self._redact_url(url),
+                header_keys=tuple(sorted(request_headers.keys())),
+                status=None,
+                server_date=None,
+            )
+
             try:
                 response = self._session.request(
                     method,
                     url,
-                    headers=dict(headers or {}),
+                    headers=request_headers,
                     params=dict(params or {}),
                     json=json_body,
                     data=data,
@@ -162,42 +181,108 @@ class HttpClient:
                     stream=stream,
                 )
             except Timeout as exc:
-                last_exc = exc
-                self._logger.warning("DingDrive request timeout (%s %s) attempt %d", method, url, attempt)
-                if self._should_retry(attempt, attempts, allow_retry):
-                    self._sleep_with_backoff(backoff, max_backoff, attempt)
-                    continue
-                raise DriveRetryableError("Request timed out", payload={"url": url}) from exc
-            except (ConnectionError, RequestException) as exc:
-                last_exc = exc
-                self._logger.warning("DingDrive request error (%s %s): %s", method, url, exc)
-                if self._should_retry(attempt, attempts, allow_retry):
-                    self._sleep_with_backoff(backoff, max_backoff, attempt)
-                    continue
-                raise DriveRetryableError("Request failed", payload={"url": url}) from exc
-
-            if response.status_code in expected:
-                return response
-
-            if response.status_code == 401:
-                raise DriveAuthError("Unauthorized", status_code=401, payload=_safe_json(response))
-            if response.status_code == 404:
-                raise DriveNotFound("Resource not found", status_code=404, payload=_safe_json(response))
-
-            if allow_retry and response.status_code in RETRYABLE_STATUS and self._should_retry(attempt, attempts, True):
+                last_error = DriveRetryableError("Request timed out", payload={"url": diagnostics.url})
                 self._logger.warning(
-                    "Retryable response from DingTalk (%s) attempt %d/%d", response.status_code, attempt, attempts
+                    "dingdrive.http timeout method=%s url=%s attempt=%d",
+                    diagnostics.method,
+                    diagnostics.url,
+                    attempt,
+                    exc_info=exc,
                 )
-                self._sleep_with_backoff(backoff, max_backoff, attempt)
+            except (ConnectionError, RequestException) as exc:
+                last_error = DriveRetryableError("Request failed", payload={"url": diagnostics.url})
+                self._logger.warning(
+                    "dingdrive.http connection_error method=%s url=%s attempt=%d error=%s",
+                    diagnostics.method,
+                    diagnostics.url,
+                    attempt,
+                    type(exc).__name__,
+                    exc_info=exc,
+                )
+            else:
+                diagnostics = diagnostics.__class__(
+                    method=diagnostics.method,
+                    url=diagnostics.url,
+                    header_keys=diagnostics.header_keys,
+                    status=response.status_code,
+                    server_date=response.headers.get("Date"),
+                )
+                status = response.status_code
+                payload = self._safe_json(response)
+                if status in expected:
+                    return response
+
+                if status == 401 and attach_token:
+                    self._auth.invalidate()
+                    self._logger.info(
+                        "dingdrive.http unauthorized method=%s url=%s -- refreshing token",
+                        diagnostics.method,
+                        diagnostics.url,
+                    )
+                    last_error = DriveAuthError("Unauthorized", status_code=status, payload=payload)
+                    refresh_token_next = True
+                elif status == 404:
+                    raise DriveNotFound("Resource not found", status_code=status, payload=payload)
+                elif status == 403 or self._contains_signature_error(payload):
+                    self._log_forbidden(diagnostics, payload)
+                    raise DriveAuthError("Forbidden", status_code=status, payload=payload)
+                elif allow_retry and status in RETRYABLE_STATUS:
+                    self._logger.warning(
+                        "dingdrive.http retryable_status method=%s url=%s status=%d",
+                        diagnostics.method,
+                        diagnostics.url,
+                        status,
+                    )
+                    last_error = DriveRetryableError(
+                        "Retryable response",
+                        status_code=status,
+                        payload=payload,
+                    )
+                else:
+                    raise DriveRequestError(
+                        f"Unexpected status {status}",
+                        status_code=status,
+                        payload=payload,
+                    )
+
+            if attempt < attempts:
+                self._sleep_with_backoff(base_backoff, max_backoff, attempt)
+                if refresh_token_next:
+                    continue
+                refresh_token_next = attach_token and isinstance(last_error, DriveAuthError)
                 continue
+            if last_error is not None:
+                raise last_error
+            raise DriveRetryableError("Exhausted retries", payload={"url": diagnostics.url})
 
-            raise DriveRequestError(
-                f"Unexpected status {response.status_code}",
-                status_code=response.status_code,
-                payload=_safe_json(response),
-            )
+        raise DriveRetryableError("Exhausted retries", payload={"url": self._redact_url(url)})
 
-        raise DriveRetryableError("Exhausted retries", payload={"url": url}) from last_exc
+    def _log_forbidden(self, diagnostics: RequestDiagnostics, payload: dict[str, object]) -> None:
+        hint = "Sync server/client time, verify app scope per DingDrive handbook"
+        self._logger.error(
+            "dingdrive.http forbidden method=%s url=%s status=%s header_keys=%s server_date=%s hint=%s payload_code=%s",
+            diagnostics.method,
+            diagnostics.url,
+            diagnostics.status,
+            ",".join(diagnostics.header_keys),
+            diagnostics.server_date,
+            hint,
+            payload.get("code") or payload.get("errorCode"),
+        )
+
+    def _contains_signature_error(self, payload: Mapping[str, object]) -> bool:
+        code = str(payload.get("code") or payload.get("errorCode") or "")
+        message = str(payload.get("message") or payload.get("msg") or "")
+        if code in OSS_SIGNATURE_ERRORS:
+            return True
+        body = str(payload.get("body") or "")
+        haystack = f"{message} {body}"
+        return any(keyword in haystack for keyword in OSS_SIGNATURE_ERRORS)
+
+    def _redact_url(self, url: str) -> str:
+        if "?" in url:
+            return url.split("?")[0]
+        return url
 
     def _compose_url(self, path: str) -> str:
         base = self._config.base_url.rstrip("/")
@@ -207,23 +292,19 @@ class HttpClient:
             path = f"/{path}"
         return f"{base}{path}"
 
-    def _should_retry(self, attempt: int, max_attempts: int, allow_retry: bool) -> bool:
-        return allow_retry and attempt < max_attempts
-
     def _sleep_with_backoff(self, base: float, maximum: float, attempt: int) -> None:
         delay = min(maximum, base * (2 ** (attempt - 1)))
         jitter = random.uniform(0, delay / 2)
         time.sleep(delay + jitter)
 
+    def _safe_json(self, response: Response) -> dict[str, object]:
+        try:
+            return response.json()
+        except ValueError:
+            text = response.text
+            if len(text) > 200:
+                text = text[:200] + "..."
+            return {"body": text}
 
-def _safe_json(response: Response) -> dict[str, object]:
-    try:
-        return response.json()
-    except ValueError:
-        text = response.text
-        if len(text) > 200:
-            text = text[:200] + "..."
-        return {"body": text}
 
-
-__all__ = ["HttpClient", "DingTalkAuth", "AUTHORIZATION_HEADER"]
+__all__ = ["HttpClient", "AUTHORIZATION_HEADER"]

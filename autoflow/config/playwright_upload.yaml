@@ -1,0 +1,20 @@
+# Default configuration for Playwright-based DingTalk Drive uploads
+
+app_defaults:
+  default_drive: "企业盘"
+  concurrency: 3
+  retry_attempts: 2
+
+paths:
+  trace_dir: ".artifacts/trace"
+  screenshot_dir: ".artifacts/screens"
+
+timeouts:
+  navigation: 30
+  upload: 120
+
+site_profile:
+  single_file_threshold_mb: 200
+  batch_size_limit: 500
+  has_conflict_dialog: true
+  uses_iframe_workspace: true

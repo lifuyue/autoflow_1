@@ -147,6 +147,37 @@ autoflow\build_win.bat
 - 下载/上传选择器不生效：
   - 根据实际页面改 `config/selectors/*.yaml`，检查 `profiles.yaml` 中的 `selectors_file` 路径
 
+### Playwright 上传运行指南
+
+1. **准备会话**：
+   - 运行 `python -m playwright open https://www.dingtalk.com/` 或启动 `drive upload-playwright` 的浏览器后手动登录，确认目标企业名称无误。
+   - 登录成功后在 Playwright 控制台输入 `await page.context().storage_state({ path: 'browser/storageState.json' })`（或使用内置“登录后保存会话”按钮），生成 `storageState.json`。
+   - 手工登录比脚本自动输账号更稳：企业账号通常带验证码/钉钉确认，人工确认一次可复用，后续脚本无需反复触发风控。
+
+2. **CLI 快速开始**：
+   ```bash
+   python -m autoflow.cli drive upload-playwright \
+     '企业盘/报关/2025年' \
+     './out/*.xlsx' \
+     --tenant '宁波跨境事业部' \
+     --home-url 'https://aflow.dingtalk.com/client/file/home' \
+     --storage-state browser/storageState.json \
+     --export-results
+   ```
+   - 日志与截图默认写入 `.artifacts/screens/`，trace 压缩包在 `.artifacts/trace/`。
+
+3. **常见疑问**：
+   - *为什么不用 `networkidle` 等待条件？* 官方建议真实生产站点避免 `networkidle`，因为长轮询/心跳会让等待一直挂起；本项目以“业务信号”（按钮可见、Toast 出现）为准更可靠。
+   - *下载的失败明细在哪？* CLI 会调用 `page.expect_download()`，文件保存到下载目录（默认 `autoflow/work/tmp/browser_downloads/`），命名包含时间戳，例如 `20250105-103012_result.csv`。
+   - *如何定位元素？* 优先使用 `get_by_role()`、`get_by_text()`、`get_by_label()` 等语义化 Locator，并在嵌套页面里用 `frame_locator()` 进入 iframe；避免脆弱的 CSS/XPath。
+   - *失败如何排查？* Trace 在 `.artifacts/trace/trace.zip`，拖入 [Playwright Trace Viewer](https://playwright.dev/docs/trace-viewer) 可查看 DOM、网络请求与截图时间线。
+
+4. **钉盘操作背景**：钉钉官方帮助说明“新建文件夹/上传文件”路径：进入“企业盘/团队盘/我的盘” → 点击“新建”/“上传”，确认后文件会出现在当前目录，可参考
+   [钉钉帮助中心：网盘上传文件](https://h5.dingtalk.com/doc#/org-dev-guide/ugsiyp)。操作时先在网页手工核验一遍，确认页面结构与配置的选择器一致。
+   - 钉盘前端长期提供“新建文件夹 / 上传文件或文件夹”入口，本自动化即程序化执行该用户路径，未绕过钉钉权限或弹窗。
+   - “我的文件 / 团队文件 / 企业盘”是稳定的空间入口，适合作为路径首段锚点；后续目录可逐级定位。
+   - 若需导出“失败明细/结果”，使用 Playwright 的 `expect_download()` 监听并 `save_as()` 保存至下载目录是官方推荐方案，便于审计归档。
+
 ## 开发与测试
 - 冒烟测试（不依赖真实系统）：
 ```
